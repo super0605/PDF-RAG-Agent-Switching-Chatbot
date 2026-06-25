@@ -1,8 +1,13 @@
 # OpenAI API Demos — RAG over a PDF + Live Context Switching
 
+**Live demo:** https://pdf-rag-agent-switching-chatbot.vercel.app/
+
 One **React + TypeScript** (Vite) app containing both hiring-assignment demos.
 It talks **directly to the OpenAI REST API with `fetch`** — no OpenAI SDK — which
 matches the posting's note about using the REST API directly.
+
+> The live demo needs your own **OpenAI API key**, pasted into the bar at the top
+> (stored in your browser only, sent only to `api.openai.com`).
 
 > The original posting's stack is Laravel + Vue. This implementation is React +
 > TypeScript per the build request. The architecture maps 1:1 onto Laravel/Vue:
