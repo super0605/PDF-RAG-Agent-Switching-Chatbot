@@ -106,10 +106,17 @@ interface ChatResponse {
   choices: { message: ChatMessage; finish_reason: string }[]
 }
 
+/** "auto" | "none" | "required", or force a specific function by name. */
+export type ToolChoice =
+  | 'auto'
+  | 'none'
+  | 'required'
+  | { type: 'function'; function: { name: string } }
+
 export interface ChatOptions {
   messages: ChatMessage[]
   tools?: ToolDefinition[]
-  tool_choice?: 'auto' | 'none' | 'required'
+  tool_choice?: ToolChoice
   temperature?: number
 }
 

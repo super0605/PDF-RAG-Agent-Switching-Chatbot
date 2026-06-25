@@ -3,6 +3,7 @@ import {
   chat,
   hasApiKey,
   type ChatMessage,
+  type ToolChoice,
   type ToolDefinition,
 } from '../lib/openai'
 
@@ -91,6 +92,21 @@ function isToolNote(e: Entry): e is ToolNote {
   return (e as ToolNote).role === 'tool-call'
 }
 
+const FORCE_TOOL: ToolChoice = {
+  type: 'function',
+  function: { name: 'set_indicator' },
+}
+
+/**
+ * True when the user clearly wants the keyword emitted. We force the tool in
+ * that case so `set_indicator` fires on the very FIRST turn — otherwise the
+ * model often replies in plain text on a cold first turn and only calls the
+ * tool from the second turn onward (the "not set the first time" bug).
+ */
+function wantsIndicator(text: string): boolean {
+  return /\b(keyword|signal|indicator|emit)\b/i.test(text)
+}
+
 function colorFor(keyword: string): string {
   const k = keyword.toLowerCase()
   if (k.includes('green')) return '#1f9d55'
@@ -137,7 +153,7 @@ export function ContextSwitchChat() {
     setActiveId((id) => (id === 'red' ? 'green' : 'red'))
   }
 
-  async function send(text: string) {
+  async function send(text: string, force = false) {
     const content = text.trim()
     if (!content || busy) return
     if (!hasApiKey()) {
@@ -147,6 +163,10 @@ export function ContextSwitchChat() {
     setError('')
     setInput('')
     setBusy(true)
+
+    // Force the tool on the first model call when the intent is to emit the
+    // keyword, so it always fires the first time (not just from turn 2 on).
+    const forceFirst = force || wantsIndicator(content)
 
     // Capture the context this turn belongs to so a mid-request switch can't
     // misroute messages.
@@ -164,7 +184,12 @@ export function ContextSwitchChat() {
     pushTo(ctxId, userMsg)
 
     try {
-      let reply = await chat({ messages: convo, tools: [TOOL], temperature: 0 })
+      let reply = await chat({
+        messages: convo,
+        tools: [TOOL],
+        tool_choice: forceFirst ? FORCE_TOOL : 'auto',
+        temperature: 0,
+      })
 
       // Resolve tool calls until the model returns a plain text answer. The
       // final round forces tool_choice 'none' so we always end on text.
@@ -254,7 +279,7 @@ export function ContextSwitchChat() {
 
       <div className="quick-prompts">
         <button
-          onClick={() => send('What is my keyword? Emit it with the tool.')}
+          onClick={() => send('What is my keyword? Emit it with the tool.', true)}
           disabled={busy}
         >
           Ask for the keyword
