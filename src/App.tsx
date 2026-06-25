@@ -11,31 +11,45 @@ export default function App() {
   return (
     <div className="app">
       <header className="app-head">
-        <h1>OpenAI API Demos — RAG + Live Context Switching</h1>
-        <p className="app-sub">
-          One React + TypeScript app, two assignments. Talks directly to the
-          OpenAI REST API (no SDK).
-        </p>
+        <div className="brand">
+          <span className="brand-mark" aria-hidden="true" />
+          <div>
+            <h1>OpenAI API Demos</h1>
+            <p className="app-sub">
+              RAG over a PDF &amp; live context switching · React + TypeScript ·
+              direct OpenAI REST API (no SDK)
+            </p>
+          </div>
+        </div>
       </header>
 
       <ApiKeyBar />
 
-      <nav className="tabs">
+      <nav className="tabs" role="tablist">
         <button
+          role="tab"
+          aria-selected={tab === 'rag'}
           className={tab === 'rag' ? 'tab active' : 'tab'}
           onClick={() => setTab('rag')}
         >
-          1 · RAG over a PDF
+          <span className="tab-num">1</span> RAG over a PDF
         </button>
         <button
+          role="tab"
+          aria-selected={tab === 'context'}
           className={tab === 'context' ? 'tab active' : 'tab'}
           onClick={() => setTab('context')}
         >
-          2 · Live context switching
+          <span className="tab-num">2</span> Live context switching
         </button>
       </nav>
 
       <main>{tab === 'rag' ? <RagPdfAgent /> : <ContextSwitchChat />}</main>
+
+      <footer className="app-foot">
+        Demo build · API key stored in your browser only · models configurable in{' '}
+        <code>src/lib/openai.ts</code>
+      </footer>
     </div>
   )
 }
