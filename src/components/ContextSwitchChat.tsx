@@ -10,17 +10,19 @@ import {
 /**
  * Assignment 2 — Live context-switching chatbot.
  *
- * Requirements demonstrated:
- *  - SAME API connection + SAME live session the whole time (`chat()` / the same
- *    model, one mounted component — nothing is torn down on a switch).
- *  - A UI button swaps the bot's LIVE context.
- *  - The active context is ISOLATED: each context has its own memory partition,
- *    so switching never lets the other context's chat / tool results bleed in.
- *    The model only ever sees the active context's messages, which is what makes
- *    the output deterministic ("only remember results related to the active
- *    context"). Switch away and back and a context still remembers its OWN thread.
- *  - A TOOL CALL (`set_indicator`) reflects the active context: the "red" context
- *    yields "Red"; the "green" context yields "Green".
+ * Matches the client requirement literally:
+ *  - SAME API connection + SAME stored SINGLE-SESSION chat history stay active
+ *    the whole time. `history` is one shared array and is NEVER cleared or
+ *    partitioned on a switch — the conversation simply continues.
+ *  - A UI button swaps the bot's LIVE context. The active context lives in the
+ *    system message, which is rebuilt from the *currently active* context on
+ *    every request, so a switch takes effect immediately.
+ *  - The system prompt makes the active context AUTHORITATIVE: it overrides
+ *    anything said earlier in the same history (including the previous context's
+ *    tool result), which is what keeps the tool output correct after a switch
+ *    even though the old turns are still in the session.
+ *  - A TOOL CALL (`set_indicator`) reflects the active context: "red" -> "Red",
+ *    "green" -> "Green".
  */
 
 interface ContextDef {
@@ -65,15 +67,22 @@ const TOOL: ToolDefinition = {
   },
 }
 
+/**
+ * The system prompt is rebuilt from the ACTIVE context on every request and is
+ * explicit that the current context wins over anything earlier in the same
+ * shared history — so the single session can keep all prior turns while the tool
+ * output still flips correctly after a switch.
+ */
 function systemPromptFor(ctx: ContextDef): string {
   return (
     'You are an assistant in a live context-switching demo. ' +
-    `The ONLY thing you know about the user is this single fact: "${ctx.fact}". ` +
-    'Ignore and never mention any other favorite, color, or food that is not ' +
-    'stated in that fact — treat anything else as unknown. ' +
-    'When the user asks for their keyword / signal / favorite, or asks you to ' +
-    'emit or show it, you MUST call the `set_indicator` tool exactly once with ' +
-    'the single capitalized word that represents THIS fact ' +
+    `The user's CURRENT context is exactly this single fact: "${ctx.fact}". ` +
+    'This current context is the only source of truth. It OVERRIDES anything ' +
+    'said earlier in this conversation — including any previous favorite or any ' +
+    'earlier tool result. Treat any other favorite, color, or food as no longer ' +
+    'true. When the user asks for their keyword / signal / favorite, or asks you ' +
+    'to emit or show it, you MUST call the `set_indicator` tool exactly once with ' +
+    'the single capitalized word that represents the CURRENT context ' +
     '(a fact about the color red -> "Red"; a fact about loving green / green ' +
     'apples -> "Green"). After the tool result, confirm in one short sentence.'
   )
@@ -114,42 +123,39 @@ function colorFor(keyword: string): string {
   return '#6b7280'
 }
 
-const EMPTY_HISTORIES: Record<ContextDef['id'], Entry[]> = { red: [], green: [] }
-
 export function ContextSwitchChat() {
-  // One session, but memory is partitioned per context so the active context
-  // never sees the other context's messages/tool results.
-  const [histories, setHistories] =
-    useState<Record<ContextDef['id'], Entry[]>>(EMPTY_HISTORIES)
+  // ONE shared single-session history (system prompt is injected per-request
+  // from the active context, so it is not stored here).
+  const [history, setHistory] = useState<Entry[]>([])
   const [activeId, setActiveId] = useState<ContextDef['id']>('red')
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
   const active = CONTEXTS[activeId]
-  const entries = histories[activeId]
 
-  // Only the active context's real chat messages are sent to the API.
+  // The full session history, minus the UI-only tool-call notes, is what the
+  // API sees every turn — the conversation persists across switches.
   const apiMessages = useMemo(
-    () => entries.filter((e): e is ChatMessage => !isToolNote(e)),
-    [entries],
+    () => history.filter((e): e is ChatMessage => !isToolNote(e)),
+    [history],
   )
 
-  // The badge reflects the active context's most recent tool output.
+  // The badge reflects the most recent tool output in the session.
   const indicator = useMemo(() => {
-    for (let i = entries.length - 1; i >= 0; i--) {
-      const e = entries[i]
+    for (let i = history.length - 1; i >= 0; i--) {
+      const e = history[i]
       if (isToolNote(e)) return e.keyword
     }
     return ''
-  }, [entries])
+  }, [history])
 
-  function pushTo(id: ContextDef['id'], ...items: Entry[]) {
-    setHistories((prev) => ({ ...prev, [id]: [...prev[id], ...items] }))
+  function push(...items: Entry[]) {
+    setHistory((prev) => [...prev, ...items])
   }
 
   function switchContext() {
-    // Same session; just activate the other context's memory partition.
+    // Same session, same history — only the live context changes.
     setActiveId((id) => (id === 'red' ? 'green' : 'red'))
   }
 
@@ -168,20 +174,19 @@ export function ContextSwitchChat() {
     // keyword, so it always fires the first time (not just from turn 2 on).
     const forceFirst = force || wantsIndicator(content)
 
-    // Capture the context this turn belongs to so a mid-request switch can't
-    // misroute messages.
+    // Capture the context active at send time so a mid-request switch is clear.
     const ctx = active
     const ctxId = activeId
 
     const userMsg: ChatMessage = { role: 'user', content }
-    // The conversation the API sees: system prompt from the ACTIVE context +
-    // ONLY this context's prior messages + the new user turn.
+    // The conversation the API sees: a fresh system prompt from the ACTIVE
+    // context + the full prior single-session history + the new user turn.
     let convo: ChatMessage[] = [
       { role: 'system', content: systemPromptFor(ctx) },
       ...apiMessages,
       userMsg,
     ]
-    pushTo(ctxId, userMsg)
+    push(userMsg)
 
     try {
       let reply = await chat({
@@ -197,7 +202,7 @@ export function ContextSwitchChat() {
       while (reply.tool_calls?.length && guard < 3) {
         guard++
         convo = [...convo, reply]
-        pushTo(ctxId, reply)
+        push(reply)
 
         for (const call of reply.tool_calls) {
           let keyword = ''
@@ -207,7 +212,7 @@ export function ContextSwitchChat() {
             keyword = ''
           }
           if (call.function.name === 'set_indicator' && keyword) {
-            pushTo(ctxId, { role: 'tool-call', keyword, contextId: ctxId })
+            push({ role: 'tool-call', keyword, contextId: ctxId })
           }
           const toolMsg: ChatMessage = {
             role: 'tool',
@@ -216,7 +221,7 @@ export function ContextSwitchChat() {
             content: JSON.stringify({ displayed: keyword }),
           }
           convo = [...convo, toolMsg]
-          pushTo(ctxId, toolMsg)
+          push(toolMsg)
         }
 
         reply = await chat({
@@ -227,7 +232,7 @@ export function ContextSwitchChat() {
         })
       }
 
-      pushTo(ctxId, reply)
+      push(reply)
     } catch (err) {
       setError((err as Error).message)
     } finally {
@@ -236,16 +241,17 @@ export function ContextSwitchChat() {
   }
 
   const otherId: ContextDef['id'] = activeId === 'red' ? 'green' : 'red'
+  const messageCount = apiMessages.filter((m) => m.role === 'user').length
 
   return (
     <section className="panel">
       <header className="panel-head">
         <h2>Assignment 2 — Live context-switching chatbot</h2>
         <p className="panel-sub">
-          Same session &amp; API connection. The button swaps the live context;
-          each context keeps its <strong>own isolated memory</strong>, so results
-          from the other context never leak in. The <code>set_indicator</code>{' '}
-          tool output follows the active context.
+          One <strong>single-session</strong> chat history and the same API
+          connection stay active throughout. The button swaps the bot's live
+          context; the active context overrides earlier turns, so the{' '}
+          <code>set_indicator</code> tool output follows it (Red → Green).
         </p>
       </header>
 
@@ -287,25 +293,20 @@ export function ContextSwitchChat() {
       </div>
 
       <div className="chat-log">
-        {entries.length === 0 && (
+        {history.length === 0 && (
           <p className="muted center">
-            This “{active.buttonLabel}” context has its own memory. Ask for the
-            keyword, switch context, and ask again — the two never mix.
+            Ask for the keyword (→ Red), click “Switch context”, then ask again
+            (→ Green). The chat history below stays continuous the whole time.
           </p>
         )}
-        {entries.map((e, i) => (
+        {history.map((e, i) => (
           <Bubble key={i} entry={e} />
         ))}
         {busy && <div className="bubble assistant typing">…</div>}
       </div>
 
       <div className="memory-meter">
-        <span style={{ color: colorFor('red') }}>
-          Red memory: {histories.red.filter((e) => !isToolNote(e)).length} msg
-        </span>
-        <span style={{ color: colorFor('green') }}>
-          Green memory: {histories.green.filter((e) => !isToolNote(e)).length} msg
-        </span>
+        <span>Single session · {messageCount} user message(s) retained</span>
       </div>
 
       {error && <p className="status err">{error}</p>}
@@ -313,7 +314,7 @@ export function ContextSwitchChat() {
       <div className="row ask-row">
         <input
           type="text"
-          placeholder={`Message the bot (in “${active.buttonLabel}” context)…`}
+          placeholder="Message the bot…"
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && send(input)}

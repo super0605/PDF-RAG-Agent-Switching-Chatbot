@@ -49,13 +49,19 @@ Tab **“2 · Live context switching”** — [`src/components/ContextSwitchChat
 
 Demonstrates context switching **within one active session**:
 
-- **Same API connection + same single-session history.** The `history` state is
-  never cleared. Switching context does **not** reset the conversation.
+- **Same API connection + same single-session history.** There is one shared
+  `history` array; it is never cleared or partitioned. Switching context does
+  **not** reset the conversation — every prior turn stays in the session.
 - **Live context swap via a UI button.** The active context lives in the system
   message, which is rebuilt from the *currently active* context on every request.
-  Clicking **⇄ Switch context** flips it immediately.
+  Clicking **⇄ Switch context** flips it immediately. The system prompt makes the
+  active context **authoritative** — it overrides anything said earlier in the
+  same history (including the previous context's tool result), so the tool output
+  flips correctly even though the old turns remain in the session.
 - **Tool call follows the context.** A `set_indicator` function tool is exposed.
-  Reading the active context, the model calls it with the right keyword:
+  When the user asks for the keyword, the call is *forced* (`tool_choice`) so it
+  fires reliably on the first turn. Reading the active context, the model calls it
+  with the right keyword:
 
   | Active context | Tool output |
   | --- | --- |
@@ -65,8 +71,8 @@ Demonstrates context switching **within one active session**:
 ### Try it
 
 1. Click **“Ask for the keyword”** → tool fires `set_indicator("Red")`, badge turns red.
-2. Click **“⇄ Switch context”** (history stays on screen).
-3. Click **“Ask for the keyword”** again → same session, now `set_indicator("Green")`, badge turns green.
+2. Click **“⇄ Switch context”** — the chat history stays on screen and in the session.
+3. Click **“Ask for the keyword”** again → same session & history, now `set_indicator("Green")`, badge turns green.
 
 The transcript shows each 🔧 tool call and its result so the tool-call behavior
 is visible, proving the swap affected the AI/tool output — not just the text.
